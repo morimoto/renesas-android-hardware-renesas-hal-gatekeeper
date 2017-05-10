@@ -18,6 +18,7 @@
 #ifndef GATEKEEPER_IPC_H
 #define GATEKEEPER_IPC_H
 
+#include <stdint.h>
 #include <string.h>
 
 /*
@@ -49,6 +50,23 @@ typedef enum {
  * GateKeeper message size
  */
 #define RECV_BUF_SIZE 8192
+
+/*
+ * General message functions
+ */
+
+/*
+ * Size function. Function returns number of bytes that was used @buffer
+ * through @iter
+ *
+ * @buffer points to the start of the data
+ * @iter points to the end of read data
+ * @return number of bytes
+ */
+inline uint32_t get_size(const uint8_t *buffer, const uint8_t *iter)
+{
+	return iter - buffer;
+}
 
 /*
  * Serialization functions
@@ -83,6 +101,20 @@ inline void serialize_blob(uint8_t **buffer,
  * @data integer value
  */
 inline void serialize_int(uint8_t **buffer, uint32_t data)
+{
+	memcpy(*buffer, &data, sizeof(data));
+	*buffer += sizeof(data);
+}
+
+/*
+ * 64 bit integer serialization function. Function writes to @buffer integer
+ * @data (8 bytes). After function @buffer will point to next memory after
+ * written data.
+ *
+ * @buffer that will contain serialized data
+ * @data 64 bit integer value
+ */
+inline void serialize_int64(uint8_t **buffer, uint64_t data)
 {
 	memcpy(*buffer, &data, sizeof(data));
 	*buffer += sizeof(data);
@@ -128,6 +160,20 @@ inline void deserialize_int(const uint8_t **buffer, uint32_t *data)
 {
 	memcpy(data, *buffer, sizeof(*data));
 	*buffer += sizeof(*data);
+}
 
+/*
+ * 64 bit integer deserialization function. Function reads from @buffer integer
+ * data (8 bytes). This value will contain @data variable.
+ * After function @buffer will point to next memory after read data,
+ * @data will contain deserialized 64 bit integer.
+ *
+ * @buffer that contains serialized data
+ * @data variable that will contain deseriazed 64 bit integer
+ */
+inline void deserialize_int64(const uint8_t **buffer, uint64_t *data)
+{
+	memcpy(data, *buffer, sizeof(*data));
+	*buffer += sizeof(*data);
 }
 #endif /* GATEKEEPER_IPC_H */
