@@ -193,28 +193,103 @@ int OpteeGateKeeperDevice::Verify(uint32_t uid, uint64_t challenge,
         const uint8_t *provided_password, uint32_t provided_password_length,
         uint8_t **auth_token, uint32_t *auth_token_length, bool *request_reenroll)
 {
+    ALOGV("Start verify");
+
     if (!connected) {
         ALOGE("Device is not connected");
         return android::NO_INIT;
     }
 
     /*
-     * Unused parameters
+     * Verify request layout
+     * +---------------------------------+----------------------------------+
+     * | Name                            | Number of bytes                  |
+     * +---------------------------------+----------------------------------+
+     * | uid                             | 4                                |
+     * | challenge                       | 8                                |
+     * | enrolled_password_handle_length | 4                                |
+     * | enrolled_password_handle        | #enrolled_password_handle_length |
+     * | provided_password_length        | 4                                |
+     * | provided_password               | #provided_password_length        |
+     * +---------------------------------+----------------------------------+
      */
-    (void) &uid;
-    (void) &challenge;
-    (void) &enrolled_password_handle;
-    (void) &enrolled_password_handle_length;
-    (void) &provided_password;
-    (void) &provided_password_length;
-    (void) &auth_token;
-    (void) &auth_token_length;
-    (void) &request_reenroll;
+    const uint32_t request_size = sizeof(uid) +
+        sizeof(challenge) +
+        sizeof(enrolled_password_handle_length) +
+        enrolled_password_handle_length +
+        sizeof(provided_password_length) +
+        provided_password_length;
+    uint8_t request[request_size];
 
-    //TODO
-    ALOGE("Verify request is currently not implemented");
+    uint8_t *i_req = request;
+    serialize_int(&i_req, uid);
+    serialize_int64(&i_req, challenge);
+    serialize_blob(&i_req, enrolled_password_handle,
+            enrolled_password_handle_length);
+    serialize_blob(&i_req, provided_password, provided_password_length);
 
-    return -1;
+    uint32_t response_size = RECV_BUF_SIZE;
+    uint8_t response[response_size];
+
+    if(!Send(GK_VERIFY, request, request_size, response, response_size)) {
+        ALOGE("Verify failed without respond");
+        return android::UNKNOWN_ERROR;
+    }
+
+    const uint8_t *i_resp = response;
+    uint32_t error;
+
+    /*
+     * Verify response layout
+     * +--------------------------------+---------------------------------+
+     * | Name                           | Number of bytes                 |
+     * +--------------------------------+---------------------------------+
+     * | error                          | 4                               |
+     * +--------------------------------+---------------------------------+
+     * | retry_timeout                  | 4                               |
+     * +------------------------------ OR --------------------------------+
+     * | response_auth_token_length     | 4                               |
+     * | response_auth_token            | #response_handle_length         |
+     * | response_request_reenroll      | 4                               |
+     * +--------------------------------+---------------------------------+
+     */
+    deserialize_int(&i_resp, &error);
+    if (error == ERROR_RETRY) {
+        uint32_t retry_timeout;
+        deserialize_int(&i_resp, &retry_timeout);
+        ALOGV("Verify returns retry timeout %u", retry_timeout);
+        return retry_timeout;
+    } else if (error != ERROR_NONE) {
+        ALOGE("Verify failed");
+        return android::UNKNOWN_ERROR;
+    }
+
+    const uint8_t *response_auth_token;
+    uint32_t response_auth_token_length;
+
+    deserialize_blob(&i_resp, &response_auth_token,
+            &response_auth_token_length);
+
+    std::unique_ptr<uint8_t []> auth_token_ret(
+            new (std::nothrow) uint8_t[response_auth_token_length]);
+    if (!auth_token_ret) {
+        ALOGE("Cannot create auth token, not enough memory");
+        return android::NO_MEMORY;
+    }
+
+    memcpy(auth_token_ret.get(), response_auth_token,
+            response_auth_token_length);
+
+    *auth_token = auth_token_ret.release();
+    *auth_token_length = response_auth_token_length;
+
+    uint32_t response_request_reenroll;
+    deserialize_int(&i_resp, &response_request_reenroll);
+    *request_reenroll = (response_request_reenroll != 0);
+
+    ALOGV("Verify returns success");
+
+    return android::OK;
 }
 
 bool OpteeGateKeeperDevice::Send(uint32_t command,

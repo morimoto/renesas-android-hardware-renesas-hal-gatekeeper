@@ -75,6 +75,8 @@ TEE_Result TA_OpenSessionEntryPoint(uint32_t param_types,
 	if (param_types != exp_param_types)
 		return TEE_ERROR_BAD_PARAMETERS;
 
+	InitFailureRecords();
+
 	/* Unused parameters */
 	(void)&params;
 	(void)&sess_ctx;
@@ -233,6 +235,58 @@ exit:
 	return res;
 }
 
+static void TA_MintAuthToken(hw_auth_token_t *auth_token, int64_t timestamp,
+		secure_id_t user_id, secure_id_t authenticator_id,
+		uint64_t challenge) {
+	hw_auth_token_t		token;
+
+	token.version = HW_AUTH_TOKEN_VERSION;
+	token.challenge = challenge;
+	token.user_id = user_id;
+	token.authenticator_id = authenticator_id;
+	token.authenticator_type = TEE_U32_TO_BIG_ENDIAN(
+			(uint32_t)HW_AUTH_PASSWORD);
+	token.timestamp =  TEE_U64_TO_BIG_ENDIAN(timestamp);
+
+	if (false) {
+		//TODO get auth token key from keymaster
+	} else {
+		memset(token.hmac, 0, sizeof(token.hmac));
+	}
+
+	memcpy(auth_token, &token, sizeof(token));
+}
+
+static TEE_Result TA_DoVerify(const password_handle_t *expected_handle,
+		const uint8_t *password, uint32_t password_length)
+{
+	TEE_Result res;
+	password_handle_t password_handle;
+
+	if (!password_length) {
+		res = TEE_FALSE;
+		goto exit;
+	}
+
+	res = TA_CreatePasswordHandle(&password_handle, expected_handle->salt,
+			expected_handle->user_id, expected_handle->flags,
+			expected_handle->version, password, password_length);
+	if (res != TEE_SUCCESS) {
+		EMSG("Failed to create password handle");
+		goto exit;
+	}
+
+	if (memcmp(password_handle.signature, expected_handle->signature,
+			sizeof(expected_handle->signature)) == 0) {
+		res = TEE_TRUE;
+	} else {
+		res = TEE_FALSE;
+	}
+
+exit:
+	return res;
+}
+
 static TEE_Result TA_Enroll(TEE_Param params[TEE_NUM_PARAMS])
 {
 	TEE_Result res = TEE_SUCCESS;
@@ -323,11 +377,54 @@ static TEE_Result TA_Enroll(TEE_Param params[TEE_NUM_PARAMS])
 		// secure user_id
 		TEE_GenerateRandom(&user_id, sizeof(user_id));
 	} else {
-		//TODO Will be implement after verify
-		return TEE_ERROR_NOT_IMPLEMENTED;
+		uint64_t timestamp;
+		bool throttle;
+
+		password_handle_t *pw_handle =
+			(password_handle_t *)current_password_handle;
+		if (pw_handle->version > HANDLE_VERSION) {
+			EMSG("Wrong handle version %u, required version is %u",
+					pw_handle->version, HANDLE_VERSION);
+			error = ERROR_INVALID;
+			goto serialize_response;
+		}
+
+		user_id = pw_handle->user_id;
+		timestamp = GetTimestamp();
+
+		throttle = (pw_handle->version >= HANDLE_VERSION_THROTTLE);
+		if (throttle) {
+			failure_record_t record;
+			flags |= HANDLE_FLAG_THROTTLE_SECURE;
+			GetFailureRecord(user_id, &record);
+
+			if (ThrottleRequest(&record, timestamp, &timeout)) {
+				error = ERROR_RETRY;
+				goto serialize_response;
+			}
+
+			IncrementFailureRecord(&record, timestamp);
+		}
+
+		res = TA_DoVerify(pw_handle, current_password,
+				current_password_length);
+		switch (res) {
+		case TEE_TRUE:
+			break;
+		case TEE_FALSE:
+			if (throttle && timeout > 0) {
+				error = ERROR_RETRY;
+			} else {
+				error = ERROR_INVALID;
+			}
+			goto serialize_response;
+		default:
+			EMSG("Failed to verify password handle");
+			goto exit;
+		}
 	}
 
-	// TODO implement clear failure record
+	ClearFailureRecord(user_id);
 
 	TEE_GenerateRandom(&salt, sizeof(salt));
 	res = TA_CreatePasswordHandle(&password_handle, salt, user_id, flags,
@@ -361,6 +458,167 @@ exit:
 	return res;
 }
 
+static TEE_Result TA_Verify(TEE_Param params[TEE_NUM_PARAMS])
+{
+	TEE_Result res = TEE_SUCCESS;
+
+	/*
+	 * Verify request layout
+	 * +---------------------------------+----------------------------------+
+	 * | Name                            | Number of bytes                  |
+	 * +---------------------------------+----------------------------------+
+	 * | uid                             | 4                                |
+	 * | challenge                       | 8                                |
+	 * | enrolled_password_handle_length | 4                                |
+	 * | enrolled_password_handle        | #enrolled_password_handle_length |
+	 * | provided_password_length        | 4                                |
+	 * | provided_password               | #provided_password_length        |
+	 * +---------------------------------+----------------------------------+
+	 */
+	uint32_t uid;
+	uint64_t challenge;
+	uint32_t enrolled_password_handle_length;
+	const uint8_t *enrolled_password_handle;
+	uint32_t provided_password_length;
+	const uint8_t *provided_password;
+
+	const uint8_t *request = (const uint8_t *)params[0].memref.buffer;
+	const uint8_t *i_req = request;
+
+	/*
+	 * Verify response layout
+	 * +--------------------------------+---------------------------------+
+	 * | Name                           | Number of bytes                 |
+	 * +--------------------------------+---------------------------------+
+	 * | error                          | 4                               |
+	 * +--------------------------------+---------------------------------+
+	 * | retry_timeout                  | 4                               |
+	 * +------------------------------ OR --------------------------------+
+	 * | response_auth_token_length     | 4                               |
+	 * | response_auth_token            | #response_handle_length         |
+	 * | response_request_reenroll      | 4                               |
+	 * +--------------------------------+---------------------------------+
+	 */
+	uint32_t error = ERROR_NONE;
+	uint32_t timeout = 0;
+	hw_auth_token_t auth_token;
+	bool request_reenroll = false;
+
+	uint8_t *response = params[1].memref.buffer;
+	uint8_t *i_resp = response;
+
+	const uint32_t max_response_size = sizeof(uint32_t) +
+		sizeof(uint32_t) +
+		sizeof(password_handle_t) +
+		sizeof(uint32_t);
+
+	password_handle_t *password_handle;
+	secure_id_t user_id;
+	secure_id_t authenticator_id = 0;
+
+	uint64_t timestamp = GetTimestamp();
+	bool throttle;
+
+	deserialize_int(&i_req, &uid);
+	deserialize_int64(&i_req, &challenge);
+	deserialize_blob(&i_req, &enrolled_password_handle,
+			&enrolled_password_handle_length);
+	deserialize_blob(&i_req, &provided_password,
+			&provided_password_length);
+
+	// Check request buffer size
+	if (get_size(request, i_req) > params[0].memref.size) {
+		EMSG("Wrong request buffer size");
+		res = TEE_ERROR_BAD_PARAMETERS;
+		goto exit;
+	}
+
+	// Check response buffer size
+	if (max_response_size > params[1].memref.size) {
+		EMSG("Wrong response buffer size");
+		res = TEE_ERROR_BAD_PARAMETERS;
+		goto exit;
+	}
+
+	// Check password handle length
+	if (enrolled_password_handle_length == 0 ||
+			enrolled_password_handle_length != sizeof(password_handle_t)) {
+		EMSG("Wrong password handle size");
+		res = TEE_ERROR_BAD_PARAMETERS;
+		goto exit;
+	}
+
+	password_handle = (password_handle_t *)enrolled_password_handle;
+
+	if (password_handle->version > HANDLE_VERSION) {
+		EMSG("Wrong handle version %u, required version is %u",
+				password_handle->version, HANDLE_VERSION);
+		error = ERROR_INVALID;
+		goto serialize_response;
+	}
+
+	user_id = password_handle->user_id;
+
+	throttle = (password_handle->version >= HANDLE_VERSION_THROTTLE);
+	if (throttle) {
+		failure_record_t record;
+		GetFailureRecord(user_id, &record);
+
+		if (ThrottleRequest(&record, timestamp, &timeout)) {
+			error = ERROR_RETRY;
+			goto serialize_response;
+		}
+
+		IncrementFailureRecord(&record, timestamp);
+	} else {
+		request_reenroll = true;
+	}
+
+	res = TA_DoVerify(password_handle, provided_password,
+			provided_password_length);
+	switch (res) {
+	case TEE_TRUE:
+		TA_MintAuthToken(&auth_token, timestamp, user_id,
+				authenticator_id, challenge);
+		if (throttle) {
+			ClearFailureRecord(user_id);
+		}
+		goto serialize_response;
+	case TEE_FALSE:
+		if (throttle && timeout > 0) {
+			error = ERROR_RETRY;
+		} else {
+			error = ERROR_INVALID;
+		}
+		goto serialize_response;
+	default:
+		EMSG("Failed to verify password handle");
+		goto exit;
+	}
+
+serialize_response:
+	serialize_int(&i_resp, error);
+	switch (error) {
+	case ERROR_INVALID:
+	case ERROR_UNKNOWN:
+		break;
+	case ERROR_RETRY:
+		serialize_int(&i_resp, timeout);
+		break;
+	case ERROR_NONE:
+		serialize_blob(&i_resp, (uint8_t *)&auth_token, sizeof(auth_token));
+		serialize_int(&i_resp, (uint32_t) request_reenroll);
+		break;
+	default:
+		EMSG("Unknown error message!");
+		res = TEE_ERROR_GENERIC;
+	}
+	params[1].memref.size = get_size(response, i_resp);
+exit:
+	DMSG("Verify returns 0x%08X, error = %d", res, error);
+	return res;
+}
+
 TEE_Result TA_InvokeCommandEntryPoint(void *sess_ctx, uint32_t cmd_id,
 			uint32_t param_types, TEE_Param params[TEE_NUM_PARAMS])
 {
@@ -377,9 +635,10 @@ TEE_Result TA_InvokeCommandEntryPoint(void *sess_ctx, uint32_t cmd_id,
 	case GK_ENROLL:
 		return TA_Enroll(params);
 	case GK_VERIFY:
-		return TEE_ERROR_NOT_IMPLEMENTED;
+		return TA_Verify(params);
 	default:
 		return TEE_ERROR_BAD_PARAMETERS;
+	}
 
 	(void)&sess_ctx; /* Unused parameter */
 

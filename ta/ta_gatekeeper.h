@@ -45,9 +45,40 @@ typedef struct __packed {
 } password_handle_t;
 
 
+/*
+ * Please keep hw_auth_token_t structure consistent with its counterpart
+ * which defined in hardware/libhardware/include/hardware/hw_auth_token.h
+ */
+
+#define HW_AUTH_TOKEN_VERSION 0
+
+typedef enum {
+	HW_AUTH_NONE = 0,
+	HW_AUTH_PASSWORD = 1 << 0,
+	HW_AUTH_FINGERPRINT = 1 << 1,
+	// Additional entries should be powers of 2.
+	HW_AUTH_ANY = (int)((uint32_t) ~0U)
+} hw_authenticator_type_t;
+
+/*
+ * Data format for an authentication record used to prove successful authentication.
+ */
+typedef struct __packed {
+	uint8_t version;
+	uint64_t challenge;
+	uint64_t user_id;             // secure user ID, not Android user ID
+	uint64_t authenticator_id;    // secure authenticator ID
+	uint32_t authenticator_type;  // hw_authenticator_type_t, in network order
+	uint64_t timestamp;           // in network order
+	uint8_t hmac[32];
+} hw_auth_token_t;
+
 
 #define HMAC_SHA256_KEY_SIZE_BYTE 32
 #define HMAC_SHA256_KEY_SIZE_BIT (8*HMAC_SHA256_KEY_SIZE_BYTE)
 
+
+#define TEE_TRUE TEE_SUCCESS
+#define TEE_FALSE 1
 
 #endif /* TA_GATEKEEPER_H */

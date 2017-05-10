@@ -14,4 +14,4 @@
 # limitations under the License.
 
 global-incdirs-y += include
-srcs-y += gatekeeper_ta.c
+srcs-y += gatekeeper_ta.c failure_record.c
