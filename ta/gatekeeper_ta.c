@@ -235,10 +235,85 @@ exit:
 	return res;
 }
 
+static TEE_Result TA_GetAuthTokenKey(TEE_ObjectHandle key)
+{
+	TEE_Result		res;
+
+	uint8_t			dummy[HMAC_SHA256_KEY_SIZE_BYTE];
+	uint8_t			authTokenKeyData[HMAC_SHA256_KEY_SIZE_BYTE];
+	uint32_t		paramTypes;
+	TEE_Param		params[TEE_NUM_PARAMS];
+	TEE_TASessionHandle	sess;
+	uint32_t 		returnOrigin;
+	const TEE_UUID		uuid = TA_KEYMASTER_UUID;
+	TEE_Attribute		attrs[1];
+
+
+	DMSG("Connect to keymaster");
+
+	paramTypes = TEE_PARAM_TYPES(TEE_PARAM_TYPE_NONE,
+				     TEE_PARAM_TYPE_NONE,
+				     TEE_PARAM_TYPE_NONE,
+				     TEE_PARAM_TYPE_NONE);
+	memset(params, 0, sizeof(params));
+
+	res = TEE_OpenTASession(&uuid, TEE_TIMEOUT_INFINITE, paramTypes, params, &sess,
+			&returnOrigin);
+	if (res != TEE_SUCCESS) {
+		EMSG("Failed to connect to keymaster");
+		goto exit;
+	}
+
+	paramTypes = TEE_PARAM_TYPES(TEE_PARAM_TYPE_MEMREF_INPUT,
+				     TEE_PARAM_TYPE_MEMREF_OUTPUT,
+				     TEE_PARAM_TYPE_NONE,
+				     TEE_PARAM_TYPE_NONE);
+	memset(&params, 0, sizeof(params));
+
+	params[0].memref.buffer = dummy;
+	params[0].memref.size = sizeof(dummy);
+
+	params[1].memref.buffer = authTokenKeyData;
+	params[1].memref.size = sizeof(authTokenKeyData);
+
+	res = TEE_InvokeTACommand(sess, TEE_TIMEOUT_INFINITE, KM_GET_AUTHTOKEN_KEY,
+			paramTypes, params, &returnOrigin);
+	if (res != TEE_SUCCESS) {
+		EMSG("Failed in keymaster");
+		goto close_sess;
+	}
+
+	if (params[1].memref.size != sizeof(authTokenKeyData)) {
+		EMSG("Wrong auth_token key size");
+		res = TEE_ERROR_CORRUPT_OBJECT;
+		goto close_sess;
+	}
+
+	TEE_InitRefAttribute(&attrs[0], TEE_ATTR_SECRET_VALUE, authTokenKeyData,
+			sizeof(authTokenKeyData));
+	res = TEE_PopulateTransientObject(key, attrs,
+			sizeof(attrs)/sizeof(attrs[0]));
+	if (res != TEE_SUCCESS) {
+		EMSG("Failed to set auth_token key attributes");
+		goto close_sess;
+	}
+
+close_sess:
+	TEE_CloseTASession(sess);
+exit:
+	return res;
+}
+
 static void TA_MintAuthToken(hw_auth_token_t *auth_token, int64_t timestamp,
 		secure_id_t user_id, secure_id_t authenticator_id,
 		uint64_t challenge) {
+	TEE_Result		res;
+
 	hw_auth_token_t		token;
+	TEE_ObjectHandle	authTokenKey = TEE_HANDLE_NULL;
+
+	const uint8_t		*toSign = (const uint8_t *)&token;
+	const uint32_t		toSignLen = sizeof(token) - sizeof(token.hmac);
 
 	token.version = HW_AUTH_TOKEN_VERSION;
 	token.challenge = challenge;
@@ -247,13 +322,32 @@ static void TA_MintAuthToken(hw_auth_token_t *auth_token, int64_t timestamp,
 	token.authenticator_type = TEE_U32_TO_BIG_ENDIAN(
 			(uint32_t)HW_AUTH_PASSWORD);
 	token.timestamp =  TEE_U64_TO_BIG_ENDIAN(timestamp);
+	memset(token.hmac, 0, sizeof(token.hmac));
 
-	if (false) {
-		//TODO get auth token key from keymaster
-	} else {
-		memset(token.hmac, 0, sizeof(token.hmac));
+	res = TEE_AllocateTransientObject(TEE_TYPE_HMAC_SHA256,
+			HMAC_SHA256_KEY_SIZE_BIT, &authTokenKey);
+	if (res != TEE_SUCCESS) {
+		EMSG("Failed to allocate auth_token key");
+		goto exit;
 	}
 
+	res = TA_GetAuthTokenKey(authTokenKey);
+	if (res != TEE_SUCCESS) {
+		EMSG("Failed to get auth_token key from keymaster");
+		goto free_key;
+	}
+
+	res = TA_ComputeSignature(token.hmac, sizeof(token.hmac), authTokenKey,
+			toSign, toSignLen);
+	if (res != TEE_SUCCESS) {
+		EMSG("Failed to compute auth_token signature");
+		memset(token.hmac, 0, sizeof(token.hmac));
+		goto free_key;
+	}
+
+free_key:
+	TEE_FreeTransientObject(authTokenKey);
+exit:
 	memcpy(auth_token, &token, sizeof(token));
 }
 

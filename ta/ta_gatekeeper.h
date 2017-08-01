@@ -81,4 +81,17 @@ typedef struct __packed {
 #define TEE_TRUE TEE_SUCCESS
 #define TEE_FALSE 1
 
+/*
+ * Please keep this variable consistent with TA_UUID variable that
+ * is defined in Keymaster Android.mk file
+ */
+#define TA_KEYMASTER_UUID { 0xdba51a17, 0x0563, 0x11e7, \
+	                { 0x93, 0xb1, 0x6f, 0xa7, 0xb0, 0x07, 0x1a, 0x51} }
+
+/*
+ * Please keep this define consistent with KM_GET_AUTHTOKEN_KEY constant that
+ * is defined in Keymaster
+ */
+#define KM_GET_AUTHTOKEN_KEY 65536
+
 #endif /* TA_GATEKEEPER_H */
