@@ -20,7 +20,7 @@
 #include <cerrno>
 #include <memory>
 
-#define LOG_TAG "Salvator GateKeeper HAL"
+#define LOG_TAG "Renesas GateKeeper HAL"
 #include <utils/Log.h>
 #include <utils/Errors.h>
 
@@ -71,7 +71,7 @@ struct gatekeeper_module HAL_MODULE_INFO_SYM = {
         .module_api_version = GATEKEEPER_MODULE_API_VERSION_0_1,
         .hal_api_version = HARDWARE_HAL_API_VERSION,
         .id = GATEKEEPER_HARDWARE_MODULE_ID,
-        .name = "Salvator GateKeeper HAL",
+        .name = "Renesas GateKeeper HAL",
         .author = "Renesas Electronics",
         .methods = &gatekeeper_module_methods,
         .dso = 0,
