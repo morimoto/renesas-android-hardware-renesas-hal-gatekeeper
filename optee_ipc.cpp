@@ -22,7 +22,11 @@
 
 #include "optee_ipc.h"
 
+namespace android {
+namespace hardware {
 namespace gatekeeper {
+namespace V1_0 {
+namespace renesas {
 
 OpteeIPC::OpteeIPC()
     : inUse(false)
@@ -104,4 +108,8 @@ bool OpteeIPC::call(uint32_t cmd,
     return true;
 }
 
-}
+}  // namespace renesas
+}  // namespace V1_0
+}  // namespace gatekeeper
+}  // namespace hardware
+}  // namespace android

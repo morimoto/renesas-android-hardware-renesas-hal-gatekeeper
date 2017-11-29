@@ -21,7 +21,11 @@
 extern "C" {
 #include <tee_client_api.h>
 }
+namespace android {
+namespace hardware {
 namespace gatekeeper {
+namespace V1_0 {
+namespace renesas {
 
 class OpteeIPC {
 public:
@@ -39,6 +43,10 @@ private:
     TEEC_Session sess;
     bool inUse;
 };
-}
+}  // namespace renesas
+}  // namespace V1_0
+}  // namespace gatekeeper
+}  // namespace hardware
+}  // namespace android
 
 #endif /* OPTEE_IPC_H */

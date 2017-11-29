@@ -15,39 +15,24 @@
  * limitations under the License.
  */
 
-#include <cassert>
-#include <type_traits>
 #include <string>
-
-#define LOG_TAG "OpteeGateKeeper"
 #include <utils/Log.h>
-#include <utils/Errors.h>
 
 #include <gatekeeper_ipc.h>
 #include "optee_gatekeeper_device.h"
 
+#undef LOG_TAG
+#define LOG_TAG "OpteeGateKeeper"
+
+namespace android {
+namespace hardware {
 namespace gatekeeper {
+namespace V1_0 {
+namespace renesas {
 
-OpteeGateKeeperDevice::OpteeGateKeeperDevice(const hw_module_t *module)
-    : connected(false)
+OpteeGateKeeperDevice::OpteeGateKeeperDevice()
 {
-    static_assert(std::is_standard_layout<OpteeGateKeeperDevice>::value,
-                  "OpteeGateKeeperDevice must be standard layout");
-    static_assert(offsetof(OpteeGateKeeperDevice, gatekeeperDevice) == 0,
-                  "device_ must be the first member of OpteeGateKeeperDevice");
-    static_assert(offsetof(OpteeGateKeeperDevice, gatekeeperDevice.common) == 0,
-                  "common must be the first member of gatekeeper_device");
-
-    memset(&gatekeeperDevice, 0, sizeof(gatekeeperDevice));
-    gatekeeperDevice.common.tag = HARDWARE_DEVICE_TAG;
-    gatekeeperDevice.common.version = 1;
-    gatekeeperDevice.common.module = const_cast<hw_module_t *>(module);
-    gatekeeperDevice.common.close = close_device;
-
-    gatekeeperDevice.enroll = enroll;
-    gatekeeperDevice.verify = verify;
-    gatekeeperDevice.delete_user = nullptr;
-    gatekeeperDevice.delete_all_users = nullptr;
+    connect();
 }
 
 OpteeGateKeeperDevice::~OpteeGateKeeperDevice()
@@ -55,50 +40,20 @@ OpteeGateKeeperDevice::~OpteeGateKeeperDevice()
     disconnect();
 }
 
-bool OpteeGateKeeperDevice::connect()
-{
-    if (connected) {
-        ALOGE("Device is already connected");
-        return false;
-    }
-
-    if (!gatekeeperIPC.connect(TA_GATEKEEPER_UUID)) {
-        ALOGE("Fail to load Gatekeeper TA");
-        return false;
-    }
-    connected = true;
-
-    ALOGV("Connected");
-
-    return true;
-}
-
-void OpteeGateKeeperDevice::disconnect()
-{
-    if (connected) {
-        gatekeeperIPC.disconnect();
-        connected = false;
-    }
-
-    ALOGV("Disconnected");
-}
-
-hw_device_t* OpteeGateKeeperDevice::hw_device()
-{
-    return &gatekeeperDevice.common;
-}
-
-int OpteeGateKeeperDevice::Enroll(uint32_t uid, const uint8_t *current_password_handle,
-        uint32_t current_password_handle_length, const uint8_t *current_password,
-        uint32_t current_password_length, const uint8_t *desired_password,
-        uint32_t desired_password_length, uint8_t **enrolled_password_handle,
-        uint32_t *enrolled_password_handle_length)
+Return<void> OpteeGateKeeperDevice::enroll(uint32_t uid,
+        const hidl_vec<uint8_t>& currentPasswordHandle,
+        const hidl_vec<uint8_t>& currentPassword,
+        const hidl_vec<uint8_t>& desiredPassword,
+        enroll_cb cb)
 {
     ALOGV("Start enroll");
+    GatekeeperResponse rsp;
 
-    if (!connected) {
+    if (!connected_) {
         ALOGE("Device is not connected");
-        return android::NO_INIT;
+        rsp.code = GatekeeperStatusCode::ERROR_GENERAL_FAILURE;
+        cb(rsp);
+        return Void();
     }
 
     /*
@@ -116,27 +71,29 @@ int OpteeGateKeeperDevice::Enroll(uint32_t uid, const uint8_t *current_password_
      * +--------------------------------+---------------------------------+
      */
     const uint32_t request_size = sizeof(uid) +
-        sizeof(desired_password_length) +
-        desired_password_length +
-        sizeof(current_password_length) +
-        current_password_length +
-        sizeof(current_password_handle_length) +
-        current_password_handle_length;
+        sizeof(desiredPassword.size()) +
+        desiredPassword.size() +
+        sizeof(currentPassword.size()) +
+        currentPassword.size() +
+        sizeof(currentPasswordHandle.size()) +
+        currentPasswordHandle.size();
     uint8_t request[request_size];
 
     uint8_t *i_req = request;
     serialize_int(&i_req, uid);
-    serialize_blob(&i_req, desired_password, desired_password_length);
-    serialize_blob(&i_req, current_password, current_password_length);
-    serialize_blob(&i_req, current_password_handle,
-            current_password_handle_length);
+    serialize_blob(&i_req, desiredPassword.data(), desiredPassword.size());
+    serialize_blob(&i_req, currentPassword.data(), currentPassword.size());
+    serialize_blob(&i_req, currentPasswordHandle.data(),
+            currentPasswordHandle.size());
 
     uint32_t response_size = RECV_BUF_SIZE;
     uint8_t response[response_size];
 
     if(!Send(GK_ENROLL, request, request_size, response, response_size)) {
         ALOGE("Enroll failed without respond");
-        return android::UNKNOWN_ERROR;
+        rsp.code = GatekeeperStatusCode::ERROR_GENERAL_FAILURE;
+        cb(rsp);
+        return Void();
     }
 
     const uint8_t *i_resp = response;
@@ -160,14 +117,21 @@ int OpteeGateKeeperDevice::Enroll(uint32_t uid, const uint8_t *current_password_
         uint32_t retry_timeout;
         deserialize_int(&i_resp, &retry_timeout);
         ALOGV("Enroll returns retry timeout %u", retry_timeout);
-        return retry_timeout;
-    } else if (error != ERROR_NONE) {
-        ALOGE("Enroll failed");
-        return android::UNKNOWN_ERROR;
+        rsp.timeout = retry_timeout;
+        rsp.code = GatekeeperStatusCode::ERROR_RETRY_TIMEOUT;
+        cb(rsp);
+        return Void();
     }
 
-    const uint8_t *response_handle;
-    uint32_t response_handle_length;
+    if (error != ERROR_NONE) {
+        ALOGE("Enroll failed");
+        rsp.code = GatekeeperStatusCode::ERROR_GENERAL_FAILURE;
+        cb(rsp);
+        return Void();
+    }
+
+    const uint8_t *response_handle = nullptr;
+    uint32_t response_handle_length = 0;
 
     deserialize_blob(&i_resp, &response_handle, &response_handle_length);
 
@@ -175,29 +139,38 @@ int OpteeGateKeeperDevice::Enroll(uint32_t uid, const uint8_t *current_password_
             new (std::nothrow) uint8_t[response_handle_length]);
     if (!response_handle_ret) {
         ALOGE("Cannot create enrolled password handle, not enough memory");
-        return android::NO_MEMORY;
+        rsp.code = GatekeeperStatusCode::ERROR_GENERAL_FAILURE;
+        cb(rsp);
+        return Void();
     }
 
     memcpy(response_handle_ret.get(), response_handle, response_handle_length);
 
-    *enrolled_password_handle = response_handle_ret.release();
-    *enrolled_password_handle_length = response_handle_length;
+    rsp.data.setToExternal(response_handle_ret.release(),
+                           response_handle_length,
+                           true);
+    rsp.code = GatekeeperStatusCode::STATUS_OK;
 
     ALOGV("Enroll returns success");
 
-    return android::OK;
+    cb(rsp);
+    return Void();
 }
 
-int OpteeGateKeeperDevice::Verify(uint32_t uid, uint64_t challenge,
-        const uint8_t *enrolled_password_handle, uint32_t enrolled_password_handle_length,
-        const uint8_t *provided_password, uint32_t provided_password_length,
-        uint8_t **auth_token, uint32_t *auth_token_length, bool *request_reenroll)
+Return<void> OpteeGateKeeperDevice::verify(uint32_t uid,
+                                uint64_t challenge,
+                                const hidl_vec<uint8_t>& enrolledPasswordHandle,
+                                const hidl_vec<uint8_t>& providedPassword,
+                                verify_cb cb)
 {
     ALOGV("Start verify");
+    GatekeeperResponse rsp;
 
-    if (!connected) {
+    if (!connected_) {
         ALOGE("Device is not connected");
-        return android::NO_INIT;
+        rsp.code = GatekeeperStatusCode::ERROR_GENERAL_FAILURE;
+        cb(rsp);
+        return Void();
     }
 
     /*
@@ -215,25 +188,27 @@ int OpteeGateKeeperDevice::Verify(uint32_t uid, uint64_t challenge,
      */
     const uint32_t request_size = sizeof(uid) +
         sizeof(challenge) +
-        sizeof(enrolled_password_handle_length) +
-        enrolled_password_handle_length +
-        sizeof(provided_password_length) +
-        provided_password_length;
+        sizeof(enrolledPasswordHandle.size()) +
+        enrolledPasswordHandle.size() +
+        sizeof(providedPassword.size()) +
+        providedPassword.size();
     uint8_t request[request_size];
 
     uint8_t *i_req = request;
     serialize_int(&i_req, uid);
     serialize_int64(&i_req, challenge);
-    serialize_blob(&i_req, enrolled_password_handle,
-            enrolled_password_handle_length);
-    serialize_blob(&i_req, provided_password, provided_password_length);
+    serialize_blob(&i_req, enrolledPasswordHandle.data(),
+            enrolledPasswordHandle.size());
+    serialize_blob(&i_req, providedPassword.data(), providedPassword.size());
 
     uint32_t response_size = RECV_BUF_SIZE;
     uint8_t response[response_size];
 
     if(!Send(GK_VERIFY, request, request_size, response, response_size)) {
         ALOGE("Verify failed without respond");
-        return android::UNKNOWN_ERROR;
+        rsp.code = GatekeeperStatusCode::ERROR_GENERAL_FAILURE;
+        cb(rsp);
+        return Void();
     }
 
     const uint8_t *i_resp = response;
@@ -258,105 +233,108 @@ int OpteeGateKeeperDevice::Verify(uint32_t uid, uint64_t challenge,
         uint32_t retry_timeout;
         deserialize_int(&i_resp, &retry_timeout);
         ALOGV("Verify returns retry timeout %u", retry_timeout);
-        return retry_timeout;
+        rsp.timeout = retry_timeout;
+        rsp.code = GatekeeperStatusCode::ERROR_RETRY_TIMEOUT;
+        cb(rsp);
+        return Void();
     } else if (error != ERROR_NONE) {
         ALOGE("Verify failed");
-        return android::UNKNOWN_ERROR;
+        rsp.code = GatekeeperStatusCode::ERROR_GENERAL_FAILURE;
+        cb(rsp);
+        return Void();
     }
 
-    const uint8_t *response_auth_token;
-    uint32_t response_auth_token_length;
+    const uint8_t *response_auth_token = nullptr;
+    uint32_t response_auth_token_length = 0;
 
     deserialize_blob(&i_resp, &response_auth_token,
-            &response_auth_token_length);
+        &response_auth_token_length);
 
     std::unique_ptr<uint8_t []> auth_token_ret(
             new (std::nothrow) uint8_t[response_auth_token_length]);
     if (!auth_token_ret) {
         ALOGE("Cannot create auth token, not enough memory");
-        return android::NO_MEMORY;
+        rsp.code = GatekeeperStatusCode::ERROR_GENERAL_FAILURE;
+        cb(rsp);
+        return Void();
     }
 
     memcpy(auth_token_ret.get(), response_auth_token,
             response_auth_token_length);
-
-    *auth_token = auth_token_ret.release();
-    *auth_token_length = response_auth_token_length;
+    rsp.data.setToExternal(auth_token_ret.release(),
+                           response_auth_token_length,
+                           true);
 
     uint32_t response_request_reenroll;
     deserialize_int(&i_resp, &response_request_reenroll);
-    *request_reenroll = (response_request_reenroll != 0);
+
+    if (response_request_reenroll != 0) {
+        rsp.code = GatekeeperStatusCode::STATUS_REENROLL;
+    } else {
+        rsp.code = GatekeeperStatusCode::STATUS_OK;
+    }
 
     ALOGV("Verify returns success");
 
-    return android::OK;
+    cb(rsp);
+    return Void();
+}
+
+Return<void> OpteeGateKeeperDevice::deleteUser(uint32_t uid, deleteUser_cb cb)
+{
+    GatekeeperResponse rsp;
+    (void)uid;
+    rsp.code = GatekeeperStatusCode::ERROR_NOT_IMPLEMENTED;
+    cb(rsp);
+    return Void();
+}
+
+Return<void> OpteeGateKeeperDevice::deleteAllUsers(deleteAllUsers_cb cb)
+{
+    GatekeeperResponse rsp;
+    rsp.code = GatekeeperStatusCode::ERROR_NOT_IMPLEMENTED;
+    cb(rsp);
+    return Void();
+}
+
+bool OpteeGateKeeperDevice::connect()
+{
+    if (connected_) {
+        ALOGE("Device is already connected");
+        return false;
+    }
+
+    if (!gatekeeperIPC_.connect(TA_GATEKEEPER_UUID)) {
+        ALOGE("Fail to load Gatekeeper TA");
+        return false;
+    }
+    connected_ = true;
+
+    ALOGV("Connected");
+
+    return true;
+}
+
+void OpteeGateKeeperDevice::disconnect()
+{
+    if (connected_) {
+        gatekeeperIPC_.disconnect();
+        connected_ = false;
+    }
+
+    ALOGV("Disconnected");
 }
 
 bool OpteeGateKeeperDevice::Send(uint32_t command,
         const uint8_t *request, uint32_t request_size,
         uint8_t *response, uint32_t& response_size)
 {
-    return gatekeeperIPC.call(command, request, request_size,
+    return gatekeeperIPC_.call(command, request, request_size,
             response, response_size);
 }
 
-static inline OpteeGateKeeperDevice *convert_device(const gatekeeper_device *dev)
-{
-    return reinterpret_cast<OpteeGateKeeperDevice *>(const_cast<gatekeeper_device *>(dev));
-}
-
-/* static */
-int OpteeGateKeeperDevice::enroll(const struct gatekeeper_device *dev, uint32_t uid,
-            const uint8_t *current_password_handle, uint32_t current_password_handle_length,
-            const uint8_t *current_password, uint32_t current_password_length,
-            const uint8_t *desired_password, uint32_t desired_password_length,
-            uint8_t **enrolled_password_handle, uint32_t *enrolled_password_handle_length)
-{
-    if (dev == NULL ||
-            enrolled_password_handle == NULL || enrolled_password_handle_length == NULL ||
-            desired_password == NULL || desired_password_length == 0) {
-        ALOGE("Enroll: Bad args");
-        return android::BAD_VALUE;
-    }
-
-    // Current password and current password handle go together
-    if (current_password_handle == NULL || current_password_handle_length == 0 ||
-            current_password == NULL || current_password_length == 0) {
-        current_password_handle = NULL;
-        current_password_handle_length = 0;
-        current_password = NULL;
-        current_password_length = 0;
-    }
-
-    return convert_device(dev)->Enroll(uid, current_password_handle, current_password_handle_length,
-            current_password, current_password_length, desired_password, desired_password_length,
-            enrolled_password_handle, enrolled_password_handle_length);
-
-}
-
-/* static */
-int OpteeGateKeeperDevice::verify(const struct gatekeeper_device *dev, uint32_t uid,
-        uint64_t challenge, const uint8_t *enrolled_password_handle,
-        uint32_t enrolled_password_handle_length, const uint8_t *provided_password,
-        uint32_t provided_password_length, uint8_t **auth_token, uint32_t *auth_token_length,
-        bool *request_reenroll)
-{
-    if (dev == NULL || enrolled_password_handle == NULL ||
-            provided_password == NULL) {
-        ALOGE("Verify: Bad args");
-        return android::BAD_VALUE;
-    }
-
-    return convert_device(dev)->Verify(uid, challenge, enrolled_password_handle,
-            enrolled_password_handle_length, provided_password, provided_password_length,
-            auth_token, auth_token_length, request_reenroll);
-}
-
-/* static */
-int OpteeGateKeeperDevice::close_device(hw_device_t* dev)
-{
-    delete reinterpret_cast<OpteeGateKeeperDevice *>(dev);
-    return android::OK;
-}
-
-};
+}  // namespace renesas
+}  // namespace V1_0
+}  // namespace gatekeeper
+}  // namespace hardware
+}  // namespace android

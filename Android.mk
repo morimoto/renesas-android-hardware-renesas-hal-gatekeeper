@@ -22,7 +22,8 @@ LOCAL_PATH:= $(call my-dir)
 ################################################################################
 include $(CLEAR_VARS)
 
-LOCAL_MODULE := gatekeeper.$(TARGET_PRODUCT)
+LOCAL_MODULE := android.hardware.gatekeeper@1.0-service.renesas
+LOCAL_INIT_RC := android.hardware.gatekeeper@1.0-service.renesas.rc
 LOCAL_MODULE_RELATIVE_PATH := hw
 LOCAL_MODULE_TAGS := optional
 LOCAL_VENDOR_MODULE := true
@@ -31,7 +32,7 @@ LOCAL_CFLAGS = -Wall -Werror
 LOCAL_CFLAGS += -DANDROID_BUILD
 
 LOCAL_SRC_FILES := \
-	module.cpp \
+	service.cpp \
 	optee_gatekeeper_device.cpp \
 	optee_ipc.cpp
 
@@ -42,11 +43,16 @@ LOCAL_C_INCLUDES := \
 LOCAL_SHARED_LIBRARIES := \
 	liblog \
 	libcutils \
-	libteec
+	libteec \
+	libhardware \
+	libhidlbase \
+	libhidltransport \
+	libutils \
+	android.hardware.gatekeeper@1.0
 
 LOCAL_MULTILIB := 64
 
-include $(BUILD_SHARED_LIBRARY)
+include $(BUILD_EXECUTABLE)
 
 ################################################################################
 # Build gatekeeper HAL TA                                                      #
