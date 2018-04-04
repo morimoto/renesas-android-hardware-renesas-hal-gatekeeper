@@ -57,12 +57,12 @@ include $(BUILD_EXECUTABLE)
 ################################################################################
 # Build gatekeeper HAL TA                                                      #
 ################################################################################
-include $(TARGET_DEVICE_DIR)/build/ta_clear_vars.mk
 
 # Please keep this variable consistent with TA_GATEKEEPER_UUID define that
 # defined in gatekeeper_ipc.h file
 TA_UUID:=4d573443-6a56-4272-ac6f2425af9ef9bb
 TA_SRC:=$(LOCAL_PATH)/ta
 
-include $(TARGET_DEVICE_DIR)/build/ta_build_executable.mk
+include $(LOCAL_PATH)/ta/build_executable.mk
+
 endif # Include only for Renesas ones.
