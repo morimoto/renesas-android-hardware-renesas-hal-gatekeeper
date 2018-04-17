@@ -63,7 +63,7 @@ typedef enum {
  * @iter points to the end of read data
  * @return number of bytes
  */
-inline uint32_t get_size(const uint8_t *buffer, const uint8_t *iter)
+static inline uint32_t get_size(const uint8_t *buffer, const uint8_t *iter)
 {
 	return iter - buffer;
 }
@@ -81,7 +81,7 @@ inline uint32_t get_size(const uint8_t *buffer, const uint8_t *iter)
  * @data blob pointer
  * @length blob size
  */
-inline void serialize_blob(uint8_t **buffer,
+static inline void serialize_blob(uint8_t **buffer,
 		const uint8_t *data, uint32_t length)
 {
 	memcpy(*buffer, &length, sizeof(length));
@@ -100,7 +100,7 @@ inline void serialize_blob(uint8_t **buffer,
  * @buffer that will contain serialized data
  * @data integer value
  */
-inline void serialize_int(uint8_t **buffer, uint32_t data)
+static inline void serialize_int(uint8_t **buffer, uint32_t data)
 {
 	memcpy(*buffer, &data, sizeof(data));
 	*buffer += sizeof(data);
@@ -114,7 +114,7 @@ inline void serialize_int(uint8_t **buffer, uint32_t data)
  * @buffer that will contain serialized data
  * @data 64 bit integer value
  */
-inline void serialize_int64(uint8_t **buffer, uint64_t data)
+static inline void serialize_int64(uint8_t **buffer, uint64_t data)
 {
 	memcpy(*buffer, &data, sizeof(data));
 	*buffer += sizeof(data);
@@ -134,7 +134,7 @@ inline void serialize_int64(uint8_t **buffer, uint64_t data)
  * @data pointer that will point to deserialized blob
  * @length variable will contain blob length
  */
-inline void deserialize_blob(const uint8_t **buffer,
+static inline void deserialize_blob(const uint8_t **buffer,
 		const uint8_t **data, uint32_t *length)
 {
 	memcpy(length, *buffer, sizeof(*length));
@@ -156,7 +156,7 @@ inline void deserialize_blob(const uint8_t **buffer,
  * @buffer that contains serialized data
  * @data variable that will contain deseriazed integer
  */
-inline void deserialize_int(const uint8_t **buffer, uint32_t *data)
+static inline void deserialize_int(const uint8_t **buffer, uint32_t *data)
 {
 	memcpy(data, *buffer, sizeof(*data));
 	*buffer += sizeof(*data);
@@ -171,7 +171,7 @@ inline void deserialize_int(const uint8_t **buffer, uint32_t *data)
  * @buffer that contains serialized data
  * @data variable that will contain deseriazed 64 bit integer
  */
-inline void deserialize_int64(const uint8_t **buffer, uint64_t *data)
+static inline void deserialize_int64(const uint8_t **buffer, uint64_t *data)
 {
 	memcpy(data, *buffer, sizeof(*data));
 	*buffer += sizeof(*data);
