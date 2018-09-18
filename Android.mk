@@ -26,7 +26,7 @@ LOCAL_MODULE := android.hardware.gatekeeper@1.0-service.renesas
 LOCAL_INIT_RC := android.hardware.gatekeeper@1.0-service.renesas.rc
 LOCAL_MODULE_RELATIVE_PATH := hw
 LOCAL_MODULE_TAGS := optional
-LOCAL_VENDOR_MODULE := true
+LOCAL_PROPRIETARY_MODULE := true
 
 LOCAL_CFLAGS = -Wall -Werror
 LOCAL_CFLAGS += -DANDROID_BUILD
