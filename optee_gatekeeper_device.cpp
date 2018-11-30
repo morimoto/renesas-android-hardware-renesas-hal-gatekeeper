@@ -56,6 +56,13 @@ Return<void> OpteeGateKeeperDevice::enroll(uint32_t uid,
         return Void();
     }
 
+    if (!desiredPassword.size()) {
+        ALOGE("No password was enrolled");
+        rsp.code = GatekeeperStatusCode::ERROR_GENERAL_FAILURE;
+        cb(rsp);
+        return Void();
+    }
+
     /*
      * Enroll request layout
      * +--------------------------------+---------------------------------+
