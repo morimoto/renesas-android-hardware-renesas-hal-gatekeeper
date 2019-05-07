@@ -37,7 +37,7 @@ LOCAL_SRC_FILES := \
 	optee_ipc.cpp
 
 LOCAL_C_INCLUDES := \
-	hardware/renesas/optee-client/public \
+	vendor/renesas/utils/optee-client/public \
 	$(LOCAL_PATH)/ta/include
 
 LOCAL_SHARED_LIBRARIES := \
@@ -60,9 +60,9 @@ include $(BUILD_EXECUTABLE)
 
 # Please keep this variable consistent with TA_GATEKEEPER_UUID define that
 # defined in gatekeeper_ipc.h file
-TA_UUID:=4d573443-6a56-4272-ac6f2425af9ef9bb
-TA_SRC:=$(LOCAL_PATH)/ta
+TA_UUID    := 4d573443-6a56-4272-ac6f2425af9ef9bb
+TA_SRC     := $(LOCAL_PATH)/ta
 
-include device/renesas/common/build/build_executable.mk
+include device/renesas/common/build/build_tee_app.mk
 
 endif # Include only for Renesas ones.
