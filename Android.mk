@@ -15,42 +15,41 @@
 
 # Include only for Renesas ones.
 ifneq (,$(filter $(TARGET_PRODUCT), salvator ulcb kingfisher))
-LOCAL_PATH:= $(call my-dir)
+
+LOCAL_PATH := $(call my-dir)
+TA_GATEKEEPER_SRC     := $(LOCAL_PATH)/ta
+TA_GATEKEEPER_UUID    := 4d573443-6a56-4272-ac6f2425af9ef9bb
 
 ################################################################################
 # Build gatekeeper HAL                                                         #
 ################################################################################
 include $(CLEAR_VARS)
-
-LOCAL_MODULE := android.hardware.gatekeeper@1.0-service.renesas
-LOCAL_INIT_RC := android.hardware.gatekeeper@1.0-service.renesas.rc
-LOCAL_MODULE_RELATIVE_PATH := hw
-LOCAL_MODULE_TAGS := optional
-LOCAL_PROPRIETARY_MODULE := true
-LOCAL_REQUIRED_MODULES := 4d573443-6a56-4272-ac6f2425af9ef9bb.ta
-LOCAL_CFLAGS = -Wall -Werror
-LOCAL_CFLAGS += -DANDROID_BUILD
+LOCAL_MODULE                := android.hardware.gatekeeper@1.0-service.renesas
+LOCAL_INIT_RC               := android.hardware.gatekeeper@1.0-service.renesas.rc
+LOCAL_MODULE_RELATIVE_PATH  := hw
+LOCAL_MODULE_TAGS           := optional
+LOCAL_PROPRIETARY_MODULE    := true
+LOCAL_REQUIRED_MODULES      := $(TA_GATEKEEPER_UUID)
+LOCAL_CFLAGS                += -DANDROID_BUILD
 
 LOCAL_SRC_FILES := \
-	service.cpp \
-	optee_gatekeeper_device.cpp \
-	optee_ipc.cpp
+    service.cpp \
+    optee_gatekeeper_device.cpp \
+    optee_ipc.cpp
 
 LOCAL_C_INCLUDES := \
-	vendor/renesas/utils/optee-client/public \
-	$(LOCAL_PATH)/ta/include
+    vendor/renesas/utils/optee-client/public \
+    $(TA_GATEKEEPER_SRC)/include
 
 LOCAL_SHARED_LIBRARIES := \
-	liblog \
-	libcutils \
-	libteec \
-	libhardware \
-	libhidlbase \
-	libhidltransport \
-	libutils \
-	android.hardware.gatekeeper@1.0
-
-LOCAL_MULTILIB := 64
+    liblog \
+    libcutils \
+    libteec \
+    libhardware \
+    libhidlbase \
+    libhidltransport \
+    libutils \
+    android.hardware.gatekeeper@1.0
 
 include $(BUILD_EXECUTABLE)
 
@@ -60,26 +59,26 @@ include $(BUILD_EXECUTABLE)
 
 # Please keep this variable consistent with TA_GATEKEEPER_UUID define that
 # defined in gatekeeper_ipc.h file
-TA_GATEKEEPER_UUID := 4d573443-6a56-4272-ac6f2425af9ef9bb
-TA_GATEKEEPER_SRC := $(LOCAL_PATH)/ta
-
-TA_GATEKEEPER_OUT := $(TA_OUT_INTERMEDIATES)/$(TA_GATEKEEPER_UUID)_OBJ
-
-TA_GATEKEEPER_TARGET := $(TA_GATEKEEPER_UUID)_ta
-
+TA_GATEKEEPER_OBJ           = $(PRODUCT_OUT)/obj/TA_OBJ/$(TA_GATEKEEPER_UUID)
+TA_GATEKEEPER_OUT           = $(abspath $(TA_GATEKEEPER_OBJ))
+TA_GATEKEEPER_BINARY        = $(TA_GATEKEEPER_OBJ)/$(TA_GATEKEEPER_UUID).ta
 # OP-TEE Trusted OS is dependency for TA
-.PHONY: TA_OUT_$(TA_GATEKEEPER_UUID)
-TA_OUT_$(TA_GATEKEEPER_UUID): tee.bin
+OPTEE_BINARY                = $(PRODUCT_OUT)/obj/OPTEE_OBJ/core/tee.bin
+OPTEE_TA_DEV_KIT_DIR        = $(abspath $(PRODUCT_OUT)/obj/OPTEE_OBJ/export-ta_arm64)
+
+$(TA_GATEKEEPER_BINARY): $(OPTEE_BINARY)
 	mkdir -p $(TA_GATEKEEPER_OUT)
-	mkdir -p $(TARGET_OUT_VENDOR_SHARED_LIBRARIES)/optee_armtz
+	CROSS_COMPILE=$(BSP_GCC_CROSS_COMPILE) BINARY=$(TA_GATEKEEPER_UUID) TA_DEV_KIT_DIR=$(OPTEE_TA_DEV_KIT_DIR) $(ANDROID_MAKE) -C $(TA_GATEKEEPER_SRC) O=$(TA_GATEKEEPER_OUT) clean
+	CROSS_COMPILE=$(BSP_GCC_CROSS_COMPILE) BINARY=$(TA_GATEKEEPER_UUID) TA_DEV_KIT_DIR=$(OPTEE_TA_DEV_KIT_DIR) $(ANDROID_MAKE) -C $(TA_GATEKEEPER_SRC) O=$(TA_GATEKEEPER_OUT) all
 
-.PHONY: $(TA_GATEKEEPER_TARGET)
-$(TA_GATEKEEPER_TARGET): TA_OUT_$(TA_GATEKEEPER_UUID)
-	CROSS_COMPILE=$(OPTEE_CROSS_COMPILE) BINARY=$(TA_GATEKEEPER_UUID) TA_DEV_KIT_DIR=$(TA_DEV_KIT_DIR) make -C $(TA_GATEKEEPER_SRC) O=$(TA_GATEKEEPER_OUT) clean
-	CROSS_COMPILE=$(OPTEE_CROSS_COMPILE) BINARY=$(TA_GATEKEEPER_UUID) TA_DEV_KIT_DIR=$(TA_DEV_KIT_DIR) make -C $(TA_GATEKEEPER_SRC) O=$(TA_GATEKEEPER_OUT) all
+include $(CLEAR_VARS)
+LOCAL_MODULE                := $(TA_GATEKEEPER_UUID)
+LOCAL_MODULE_STEM           := $(TA_GATEKEEPER_UUID).ta
+LOCAL_PREBUILT_MODULE_FILE  := $(TA_GATEKEEPER_BINARY)
+LOCAL_MODULE_PATH           := $(TARGET_OUT_VENDOR_SHARED_LIBRARIES)/optee_armtz/
+LOCAL_MODULE_CLASS          := EXECUTABLES
+include $(BUILD_PREBUILT)
 
-.PHONY: $(TA_GATEKEEPER_UUID).ta
-$(TA_GATEKEEPER_UUID).ta: $(TA_GATEKEEPER_TARGET)
-	cp $(TA_GATEKEEPER_OUT)/$@ $(TARGET_OUT_VENDOR_SHARED_LIBRARIES)/optee_armtz/$@
+$(LOCAL_BUILT_MODULE): $(TA_GATEKEEPER_BINARY)
 
 endif # Include only for Renesas ones.
