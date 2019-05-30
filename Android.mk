@@ -26,6 +26,7 @@ TA_GATEKEEPER_UUID    := 4d573443-6a56-4272-ac6f2425af9ef9bb
 include $(CLEAR_VARS)
 LOCAL_MODULE                := android.hardware.gatekeeper@1.0-service.renesas
 LOCAL_INIT_RC               := android.hardware.gatekeeper@1.0-service.renesas.rc
+LOCAL_VINTF_FRAGMENTS       := android.hardware.gatekeeper@1.0-service.renesas.xml
 LOCAL_MODULE_RELATIVE_PATH  := hw
 LOCAL_MODULE_TAGS           := optional
 LOCAL_PROPRIETARY_MODULE    := true
