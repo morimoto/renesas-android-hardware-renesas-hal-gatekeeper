@@ -64,7 +64,7 @@ TA_GATEKEEPER_OBJ           = $(PRODUCT_OUT)/obj/TA_OBJ/$(TA_GATEKEEPER_UUID)
 TA_GATEKEEPER_OUT           = $(abspath $(TA_GATEKEEPER_OBJ))
 TA_GATEKEEPER_BINARY        = $(TA_GATEKEEPER_OBJ)/$(TA_GATEKEEPER_UUID).ta
 # OP-TEE Trusted OS is dependency for TA
-OPTEE_BINARY                = $(PRODUCT_OUT)/obj/OPTEE_OBJ/core/tee.bin
+OPTEE_BINARY                = $(PRODUCT_OUT)/obj/OPTEE_OBJ/core/tee-raw.bin
 OPTEE_TA_DEV_KIT_DIR        = $(abspath $(PRODUCT_OUT)/obj/OPTEE_OBJ/export-ta_arm64)
 
 $(TA_GATEKEEPER_BINARY): $(OPTEE_BINARY) $(wildcard $(TA_GATEKEEPER_SRC)/*)
